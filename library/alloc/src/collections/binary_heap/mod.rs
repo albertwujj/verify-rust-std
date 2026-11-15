@@ -161,6 +161,17 @@ use crate::slice;
 use crate::vec::AsVecIntoIter;
 use crate::vec::{self, Vec};
 
+/// MUTATION TESTING ONLY: the active mutant.
+#[cfg(kani)]
+static mut MUTANT: usize = 0x6d75_7400;
+
+/// MUTATION TESTING ONLY: 1 if mutant `id` is active.
+#[cfg(kani)]
+fn kmut(id: usize) -> usize {
+    // SAFETY: single-threaded ghost state.
+    (unsafe { MUTANT } == 0x6d75_7400 + id) as usize
+}
+
 /// A priority queue implemented with a binary heap.
 ///
 /// This will be a max-heap.
@@ -317,7 +328,7 @@ impl<T: Ord, A: Allocator> Drop for PeekMut<'_, T, A> {
             // the BinaryHeap::peek_mut call. Since the PeekMut did not end up
             // getting leaked, we are now undoing the leak amplification that
             // the DerefMut prepared for.
-            unsafe { self.heap.data.set_len(original_len.get()) };
+            unsafe { self.heap.data.set_len(original_len.get() + kmut(20)) };
 
             // SAFETY: PeekMut is only instantiated for non-empty heaps.
             unsafe { self.heap.sift_down(0) };
@@ -331,7 +342,7 @@ impl<T: Ord, A: Allocator> Deref for PeekMut<'_, T, A> {
     fn deref(&self) -> &T {
         debug_assert!(!self.heap.is_empty());
         // SAFETY: PeekMut is only instantiated for non-empty heaps
-        unsafe { self.heap.data.get_unchecked(0) }
+        unsafe { self.heap.data.get_unchecked(kmut(18)) }
     }
 }
 
@@ -358,7 +369,7 @@ impl<T: Ord, A: Allocator> DerefMut for PeekMut<'_, T, A> {
         }
 
         // SAFETY: PeekMut is only instantiated for non-empty heaps
-        unsafe { self.heap.data.get_unchecked_mut(0) }
+        unsafe { self.heap.data.get_unchecked_mut(kmut(19)) }
     }
 }
 
@@ -419,7 +430,7 @@ impl<'a, T: Ord, A: Allocator> PeekMut<'a, T, A> {
         if let Some(original_len) = self.original_len.take() {
             // SAFETY: This is how many elements were in the Vec at the time of
             // the BinaryHeap::peek_mut call.
-            unsafe { self.heap.data.set_len(original_len.get()) };
+            unsafe { self.heap.data.set_len(original_len.get() + kmut(21)) };
 
             // The length of the heap did not change by sifting, upholding our own invariants.
 
@@ -437,7 +448,7 @@ impl<'a, T: Ord, A: Allocator> PeekMut<'a, T, A> {
         if let Some(original_len) = this.original_len.take() {
             // SAFETY: This is how many elements were in the Vec at the time of
             // the BinaryHeap::peek_mut call.
-            unsafe { this.heap.data.set_len(original_len.get()) };
+            unsafe { this.heap.data.set_len(original_len.get() + kmut(22)) };
 
             // Unlike in Drop, here we don't also need to do a sift_down even if
             // the caller could've mutated the element. It is removed from the
@@ -652,7 +663,7 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
     /// otherwise it's *O*(1).
     #[stable(feature = "binary_heap_peek_mut", since = "1.12.0")]
     pub fn peek_mut(&mut self) -> Option<PeekMut<'_, T, A>> {
-        if self.is_empty() { None } else { Some(PeekMut { heap: self, original_len: None }) }
+        if self.is_empty() && kmut(23) == 0 { None } else { Some(PeekMut { heap: self, original_len: None }) }
     }
 
     /// Removes the greatest item from the binary heap and returns it, or `None` if it
@@ -678,7 +689,7 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
     pub fn pop(&mut self) -> Option<T> {
         self.data.pop().map(|mut item| {
             if !self.is_empty() {
-                swap(&mut item, &mut self.data[0]);
+                swap(&mut item, &mut self.data[kmut(13)]);
                 // SAFETY: !self.is_empty() means that self.len() > 0
                 unsafe { self.sift_down_to_bottom(0) };
             }
@@ -752,7 +763,7 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
         self.data.push(item);
         // SAFETY: Since we pushed a new item it means that
         //  old_len = self.len() - 1 < self.len()
-        unsafe { self.sift_up(0, old_len) };
+        unsafe { self.sift_up(0, old_len + kmut(26)) };
     }
 
     /// Consumes the `BinaryHeap` and returns a vector in sorted
@@ -779,7 +790,7 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
         #[cfg_attr(kani, kani::loop_invariant(end <= self.data.len()))]
         #[cfg_attr(kani, kani::loop_modifies(&end, self.kani_slice()))]
         #[cfg_attr(kani, kani::loop_decreases(end))]
-        while end > 1 {
+        while end > 1 - kmut(15) {
             end -= 1;
             // SAFETY: `end` goes from `self.len() - 1` to 1 (both included),
             //  so it's always a valid index to access.
@@ -787,7 +798,7 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
             //  1 <= end < self.len(), which means self.len() >= 2.
             unsafe {
                 let ptr = self.data.as_mut_ptr();
-                ptr::swap(ptr, ptr.add(end));
+                ptr::swap(ptr, ptr.add(end + kmut(14)));
             }
             // SAFETY: `end` goes from `self.len() - 1` to 1 (both included) so:
             //  0 < 1 <= end <= self.len() - 1 < self.len()
@@ -824,8 +835,8 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
         #[cfg_attr(kani, kani::loop_invariant(hole.pos <= pos))]
         #[cfg_attr(kani, kani::loop_modifies(&hole.pos, &hole.elt, hole.kani_slice()))]
         #[cfg_attr(kani, kani::loop_decreases(hole.pos))]
-        while hole.pos() > start {
-            let parent = (hole.pos() - 1) / 2;
+        while hole.pos() + kmut(7) > start {
+            let parent = (hole.pos() - 1) / 2 + kmut(6);
 
             // SAFETY: hole.pos() > start >= 0, which means hole.pos() > 0
             //  and so hole.pos() - 1 can't underflow.
@@ -865,7 +876,7 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
             child % 2 == 1 && child / 2 == hole.pos && pos <= hole.pos && hole.pos < end
         ))]
         #[cfg_attr(kani, kani::loop_modifies(&hole.pos, &hole.elt, &child, hole.kani_slice()))]
-        while child <= end.saturating_sub(2) {
+        while child <= end.saturating_sub(2 - kmut(8)) {
             // compare with the greater of the two children
             // SAFETY: child < end - 1 < self.len() and
             //  child + 1 < end <= self.len(), so they're valid indexes.
@@ -889,7 +900,7 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
 
         // SAFETY: && short circuit, which means that in the
         //  second condition it's already true that child == end - 1 < self.len().
-        if child == end - 1 && hole.element() < unsafe { hole.get(child) } {
+        if child == end - 1 + kmut(9) && hole.element() < unsafe { hole.get(child) } {
             // SAFETY: child is already proven to be a valid index and
             //  child == 2 * hole.pos() + 1 != hole.pos().
             unsafe { hole.move_to(child) };
@@ -908,7 +919,7 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
         let len = self.len();
         // SAFETY: pos < len is guaranteed by the caller and
         //  obviously len = self.len() <= self.len().
-        unsafe { self.sift_down_range(pos, len) }
+        unsafe { self.sift_down_range(pos, len + kmut(12)) }
     }
 
     /// Take an element at `pos` and move it all the way down the heap,
@@ -937,7 +948,7 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
             child % 2 == 1 && child / 2 == hole.pos && start <= hole.pos && hole.pos < end
         ))]
         #[cfg_attr(kani, kani::loop_modifies(&hole.pos, &hole.elt, &child, hole.kani_slice()))]
-        while child <= end.saturating_sub(2) {
+        while child <= end.saturating_sub(2 - kmut(10)) {
             // SAFETY: child < end - 1 < self.len() and
             //  child + 1 < end <= self.len(), so they're valid indexes.
             //  child == 2 * hole.pos() + 1 != hole.pos() and
@@ -951,7 +962,7 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
             child = 2 * hole.pos() + 1;
         }
 
-        if child == end - 1 {
+        if child == end - 1 + kmut(11) {
             // SAFETY: child == end - 1 < self.len(), so it's a valid index
             //  and child == 2 * hole.pos() + 1 != hole.pos().
             unsafe { hole.move_to(child) };
@@ -961,7 +972,7 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
 
         // SAFETY: pos is the position in the hole and was already proven
         //  to be a valid index.
-        unsafe { self.sift_up(start, pos) };
+        unsafe { self.sift_up(start, pos + kmut(29)) };
     }
 
     /// Rebuild assuming data[0..start] is still a proper heap.
@@ -996,7 +1007,7 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
         } else {
             #[cfg_attr(kani, kani::loop_invariant(kani::index <= tail_len))]
             #[cfg_attr(kani, kani::loop_modifies(self.kani_slice()))]
-            for i in start..self.len() {
+            for i in start..self.len() + kmut(17) {
                 // SAFETY: The index `i` is always less than self.len().
                 unsafe { self.sift_up(0, i) };
             }
@@ -1004,7 +1015,7 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
     }
 
     fn rebuild(&mut self) {
-        let mut n = self.len() / 2;
+        let mut n = self.len() / 2 + kmut(16);
         #[cfg_attr(kani, kani::loop_invariant(n <= self.data.len() / 2))]
         #[cfg_attr(kani, kani::loop_modifies(&n, self.kani_slice()))]
         #[cfg_attr(kani, kani::loop_decreases(n))]
@@ -1044,7 +1055,7 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
 
         self.data.append(&mut other.data);
 
-        self.rebuild_tail(start);
+        self.rebuild_tail(start + kmut(27));
     }
 
     /// Clears the binary heap, returning an iterator over the removed elements
@@ -1604,7 +1615,7 @@ impl<'a, T> Hole<'a, T> {
     unsafe fn new(data: &'a mut [T], pos: usize) -> Self {
         debug_assert!(pos < data.len());
         // SAFETY: Caller ensures pos is inside the slice.
-        let elt = unsafe { ptr::read(data.get_unchecked(pos)) };
+        let elt = unsafe { ptr::read(data.get_unchecked(pos + kmut(1))) };
         Hole { data, elt: ManuallyDrop::new(elt), pos }
     }
 
@@ -1631,7 +1642,7 @@ impl<'a, T> Hole<'a, T> {
         debug_assert!(index != self.pos);
         debug_assert!(index < self.data.len());
         // SAFETY: Upheld by caller.
-        unsafe { self.data.get_unchecked(index) }
+        unsafe { self.data.get_unchecked(index + kmut(2)) }
     }
 
     /// Move hole to new location
@@ -1652,11 +1663,11 @@ impl<'a, T> Hole<'a, T> {
         let ptr = self.data.as_mut_ptr();
         // ignore-tidy-undocumented-unsafe
         unsafe {
-            let index_ptr: *const _ = ptr.add(index);
+            let index_ptr: *const _ = ptr.add(index + kmut(3));
             let hole_ptr = ptr.add(self.pos);
             ptr::copy_nonoverlapping(index_ptr, hole_ptr, 1);
         }
-        self.pos = index;
+        self.pos = index + kmut(4);
     }
 }
 
@@ -1667,7 +1678,7 @@ impl<T> Drop for Hole<'_, T> {
         let pos = self.pos;
         // ignore-tidy-undocumented-unsafe
         unsafe {
-            ptr::copy_nonoverlapping(&*self.elt, self.data.get_unchecked_mut(pos), 1);
+            ptr::copy_nonoverlapping(&*self.elt, self.data.get_unchecked_mut(pos + kmut(5)), 1);
         }
     }
 }
@@ -1891,7 +1902,7 @@ impl<T: Ord, A: Allocator> Iterator for IntoIterSorted<T, A> {
     #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
         let exact = self.inner.len();
-        (exact, Some(exact))
+        (exact, Some(exact + kmut(24)))
     }
 }
 
@@ -2017,7 +2028,7 @@ impl<T: Ord, A: Allocator> Iterator for DrainSorted<'_, T, A> {
     #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
         let exact = self.inner.len();
-        (exact, Some(exact))
+        (exact + kmut(25), Some(exact))
     }
 }
 
@@ -3587,5 +3598,402 @@ mod verify {
         kani::assume(heap.len() > 0);
         drop(heap.pop());
         must_have_panicked()
+    }
+
+    /// MUTATION TESTING ONLY: every harness in this module must fail.
+    mod mutants {
+        use super::*;
+
+        /// Hole::new reads the element after `pos`.
+        #[kani::proof_for_contract(Hole::<AnyOrd<u8>>::new)]
+        fn m01_hole_new_reads_next() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 1 };
+            check_hole_new::<AnyOrd<u8>>()
+        }
+
+        /// Hole::get returns the element after `index`.
+        #[kani::proof_for_contract(Hole::<AnyOrd<u8>>::get)]
+        fn m02_hole_get_next() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 2 };
+            check_hole_get::<AnyOrd<u8>>()
+        }
+
+        /// Hole::move_to copies from the element after `index`.
+        #[kani::proof_for_contract(Hole::<AnyOrd<u8>>::move_to)]
+        fn m03_hole_move_to_copies_next() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 3 };
+            check_hole_move_to::<AnyOrd<u8>>()
+        }
+
+        /// Hole::move_to records the position after `index`.
+        #[kani::proof_for_contract(Hole::<AnyOrd<u8>>::move_to)]
+        fn m04_hole_move_to_wrong_pos() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 4 };
+            check_hole_move_to::<AnyOrd<u8>>()
+        }
+
+        /// Drop for Hole writes the element back after `pos`.
+        #[kani::proof]
+        fn m05_hole_drop_writes_next() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 5 };
+            check_hole_drop::<AnyOrd<u8>>()
+        }
+
+        /// sift_up: parent index off by one (can be the hole itself).
+        #[kani::proof_for_contract(BinaryHeap::<AnyOrd<u8>>::sift_up)]
+        fn m06_sift_up_wrong_parent() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 6 };
+            check_sift_up::<AnyOrd<u8>>()
+        }
+
+        /// sift_up: loop also runs when the hole is at `start`.
+        #[kani::proof_for_contract(BinaryHeap::<AnyOrd<u8>>::sift_up)]
+        fn m07_sift_up_loops_at_root() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 7 };
+            check_sift_up::<AnyOrd<u8>>()
+        }
+
+        /// sift_down_range: loop runs while `child <= end - 1`.
+        #[kani::proof_for_contract(BinaryHeap::<AnyOrd<u8>>::sift_down_range)]
+        fn m08_sift_down_range_loop_bound() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 8 };
+            check_sift_down_range::<AnyOrd<u8>>()
+        }
+
+        /// sift_down_range: last child taken to be `end`.
+        #[kani::proof_for_contract(BinaryHeap::<AnyOrd<u8>>::sift_down_range)]
+        fn m09_sift_down_range_last_child() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 9 };
+            check_sift_down_range::<AnyOrd<u8>>()
+        }
+
+        /// sift_down_to_bottom: loop runs while `child <= end - 1`.
+        #[kani::proof_for_contract(BinaryHeap::<AnyOrd<u8>>::sift_down_to_bottom)]
+        fn m10_sift_down_to_bottom_loop_bound() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 10 };
+            check_sift_down_to_bottom::<AnyOrd<u8>>()
+        }
+
+        /// sift_down_to_bottom: last child taken to be `end`.
+        #[kani::proof_for_contract(BinaryHeap::<AnyOrd<u8>>::sift_down_to_bottom)]
+        fn m11_sift_down_to_bottom_last_child() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 11 };
+            check_sift_down_to_bottom::<AnyOrd<u8>>()
+        }
+
+        /// sift_down: range one past the length.
+        #[kani::proof_for_contract(BinaryHeap::<AnyOrd<u8>>::sift_down)]
+        fn m12_sift_down_past_len() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 12 };
+            check_sift_down::<AnyOrd<u8>>()
+        }
+
+        /// pop: swaps with the second element.
+        #[kani::proof]
+        fn m13_pop_swaps_second() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 13 };
+            check_pop::<AnyOrd<u8>>()
+        }
+
+        /// into_sorted_vec: swaps with the element after `end`.
+        #[kani::proof]
+        fn m14_into_sorted_vec_swaps_next() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 14 };
+            check_into_sorted_vec::<AnyOrd<u8>>()
+        }
+
+        /// into_sorted_vec: loop also runs for `end == 1`.
+        #[kani::proof]
+        fn m15_into_sorted_vec_loop_bound() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 15 };
+            check_into_sorted_vec::<AnyOrd<u8>>()
+        }
+
+        /// rebuild: starts one position too far.
+        #[kani::proof]
+        fn m16_rebuild_starts_late() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 16 };
+            check_rebuild::<AnyOrd<u8>>()
+        }
+
+        /// rebuild_tail: sifts up one position past the end.
+        #[kani::proof]
+        fn m17_rebuild_tail_past_end() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 17 };
+            check_rebuild_tail::<AnyOrd<u8>>()
+        }
+
+        /// PeekMut::deref: returns the second element.
+        #[kani::proof]
+        fn m18_peek_mut_deref_second() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 18 };
+            check_peek_mut_deref::<AnyOrd<u8>>()
+        }
+
+        /// PeekMut::deref_mut: returns the second element.
+        #[kani::proof]
+        fn m19_peek_mut_deref_mut_second() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 19 };
+            check_peek_mut_deref_mut_leak::<AnyOrd<u8>>()
+        }
+
+        /// Drop for PeekMut: restores one element too many.
+        #[kani::proof]
+        fn m20_peek_mut_drop_longer() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 20 };
+            check_peek_mut_drop::<AnyOrd<u8>>()
+        }
+
+        /// PeekMut::refresh: restores one element too many.
+        #[kani::proof]
+        fn m21_peek_mut_refresh_longer() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 21 };
+            check_peek_mut_refresh::<AnyOrd<u8>>()
+        }
+
+        /// PeekMut::pop: restores one element too many.
+        #[kani::proof]
+        fn m22_peek_mut_pop_longer() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 22 };
+            check_peek_mut_pop::<AnyOrd<u8>>()
+        }
+
+        /// peek_mut: returns a `PeekMut` for an empty heap.
+        #[kani::proof]
+        fn m23_peek_mut_on_empty() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 23 };
+            check_peek_mut_deref::<AnyOrd<u8>>()
+        }
+
+        /// IntoIterSorted::size_hint: upper bound one too large.
+        #[kani::proof]
+        fn m24_into_iter_sorted_upper_bound() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 24 };
+            check_into_iter_sorted::<AnyOrd<u8>>()
+        }
+
+        /// DrainSorted::size_hint: lower bound one too large.
+        #[kani::proof]
+        fn m25_drain_sorted_lower_bound() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 25 };
+            check_drain_sorted::<AnyOrd<u8>>()
+        }
+
+        /// push: sifts up from one past the new element.
+        #[kani::proof]
+        fn m26_push_sifts_past_end() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 26 };
+            check_push::<AnyOrd<u8>>()
+        }
+
+        /// append: rebuilds the tail from one position too far.
+        #[kani::proof]
+        fn m27_append_wrong_start() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 27 };
+            check_append::<AnyOrd<u8>>()
+        }
+
+        /// sift_down_to_bottom: sifts up from the position after the hole.
+        #[kani::proof_for_contract(BinaryHeap::<AnyOrd<u8>>::sift_down_to_bottom)]
+        fn m29_sift_down_to_bottom_sift_up_next() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 + 29 };
+            check_sift_down_to_bottom::<AnyOrd<u8>>()
+        }
+
+        /// Control: no mutant is active.
+        #[kani::proof_for_contract(Hole::<AnyOrd<u8>>::new)]
+        fn m00_control_hole_new() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 };
+            check_hole_new::<AnyOrd<u8>>()
+        }
+
+        /// Control: no mutant is active.
+        #[kani::proof_for_contract(Hole::<AnyOrd<u8>>::get)]
+        fn m00_control_hole_get() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 };
+            check_hole_get::<AnyOrd<u8>>()
+        }
+
+        /// Control: no mutant is active.
+        #[kani::proof_for_contract(Hole::<AnyOrd<u8>>::move_to)]
+        fn m00_control_hole_move_to() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 };
+            check_hole_move_to::<AnyOrd<u8>>()
+        }
+
+        /// Control: no mutant is active.
+        #[kani::proof]
+        fn m00_control_hole_drop() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 };
+            check_hole_drop::<AnyOrd<u8>>()
+        }
+
+        /// Control: no mutant is active.
+        #[kani::proof_for_contract(BinaryHeap::<AnyOrd<u8>>::sift_up)]
+        fn m00_control_sift_up() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 };
+            check_sift_up::<AnyOrd<u8>>()
+        }
+
+        /// Control: no mutant is active.
+        #[kani::proof_for_contract(BinaryHeap::<AnyOrd<u8>>::sift_down_range)]
+        fn m00_control_sift_down_range() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 };
+            check_sift_down_range::<AnyOrd<u8>>()
+        }
+
+        /// Control: no mutant is active.
+        #[kani::proof_for_contract(BinaryHeap::<AnyOrd<u8>>::sift_down_to_bottom)]
+        fn m00_control_sift_down_to_bottom() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 };
+            check_sift_down_to_bottom::<AnyOrd<u8>>()
+        }
+
+        /// Control: no mutant is active.
+        #[kani::proof_for_contract(BinaryHeap::<AnyOrd<u8>>::sift_down)]
+        fn m00_control_sift_down() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 };
+            check_sift_down::<AnyOrd<u8>>()
+        }
+
+        /// Control: no mutant is active.
+        #[kani::proof]
+        fn m00_control_pop() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 };
+            check_pop::<AnyOrd<u8>>()
+        }
+
+        /// Control: no mutant is active.
+        #[kani::proof]
+        fn m00_control_into_sorted_vec() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 };
+            check_into_sorted_vec::<AnyOrd<u8>>()
+        }
+
+        /// Control: no mutant is active.
+        #[kani::proof]
+        fn m00_control_rebuild() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 };
+            check_rebuild::<AnyOrd<u8>>()
+        }
+
+        /// Control: no mutant is active.
+        #[kani::proof]
+        fn m00_control_rebuild_tail() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 };
+            check_rebuild_tail::<AnyOrd<u8>>()
+        }
+
+        /// Control: no mutant is active.
+        #[kani::proof]
+        fn m00_control_peek_mut_deref() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 };
+            check_peek_mut_deref::<AnyOrd<u8>>()
+        }
+
+        /// Control: no mutant is active.
+        #[kani::proof]
+        fn m00_control_peek_mut_deref_mut_leak() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 };
+            check_peek_mut_deref_mut_leak::<AnyOrd<u8>>()
+        }
+
+        /// Control: no mutant is active.
+        #[kani::proof]
+        fn m00_control_peek_mut_drop() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 };
+            check_peek_mut_drop::<AnyOrd<u8>>()
+        }
+
+        /// Control: no mutant is active.
+        #[kani::proof]
+        fn m00_control_peek_mut_refresh() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 };
+            check_peek_mut_refresh::<AnyOrd<u8>>()
+        }
+
+        /// Control: no mutant is active.
+        #[kani::proof]
+        fn m00_control_peek_mut_pop() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 };
+            check_peek_mut_pop::<AnyOrd<u8>>()
+        }
+
+        /// Control: no mutant is active.
+        #[kani::proof]
+        fn m00_control_into_iter_sorted() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 };
+            check_into_iter_sorted::<AnyOrd<u8>>()
+        }
+
+        /// Control: no mutant is active.
+        #[kani::proof]
+        fn m00_control_drain_sorted() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 };
+            check_drain_sorted::<AnyOrd<u8>>()
+        }
+
+        /// Control: no mutant is active.
+        #[kani::proof]
+        fn m00_control_push() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 };
+            check_push::<AnyOrd<u8>>()
+        }
+
+        /// Control: no mutant is active.
+        #[kani::proof]
+        fn m00_control_append() {
+            // SAFETY: single-threaded ghost state.
+            unsafe { MUTANT = 0x6d75_7400 };
+            check_append::<AnyOrd<u8>>()
+        }
     }
 }
