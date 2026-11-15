@@ -1,0 +1,78 @@
+# Temporary: runs only the Challenge 31 harnesses, one job per element type, with the flags of
+# scripts/run-kani.sh plus those of the merge-queue job. Not part of the submission.
+name: Challenge 31 check
+
+on:
+  push:
+    branches: [ch31-review-check]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  kani:
+    name: ${{ matrix.group }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04]
+        group: [t_zst, t_cell, t_big, t_u8, t_bool, t_drop, t_u32, t_u64, t_u128, t_bytes6, t_padded, panic_, long_zst_, hole_]
+        jobs: [2]
+        include:
+          - { os: macos-latest, group: t_zst, jobs: 3 }
+          - { os: macos-latest, group: long_zst_, jobs: 3 }
+    steps:
+      - name: Remove unnecessary software to free up disk space
+        if: runner.os == 'Linux'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /usr/local/.ghcup
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install jq
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y jq
+
+      - name: Run Kani on the Challenge 31 harnesses
+        run: |
+          set -o pipefail
+          if [ "${{ matrix.group }}" = "panic_" ] || [ "${{ matrix.group }}" = "long_zst_" ] || [ "${{ matrix.group }}" = "hole_" ]; then
+            H="collections::binary_heap::verify::${{ matrix.group }}"
+          else
+            H="collections::binary_heap::verify::${{ matrix.group }}::"
+          fi
+          if [ "$RUNNER_OS" = "Linux" ]; then TIME="/usr/bin/time -v"; else TIME="/usr/bin/time -l"; fi
+          $TIME scripts/run-kani.sh --path "$GITHUB_WORKSPACE" --kani-args \
+            --harness "$H" --jobs=${{ matrix.jobs }} --output-format=terse \
+            --harness-timeout 10m --default-unwind 1000 2>&1 | tee kani.log
+
+      - name: Summary
+        if: always()
+        run: |
+          PASS=$(grep -c "VERIFICATION:- SUCCESSFUL" kani.log || true)
+          FAIL=$(grep -c "VERIFICATION:- FAILED" kani.log || true)
+          SLOW=$(grep -o "Verification Time: [0-9.]*" kani.log | awk '{print $3}' | sort -n | tail -1)
+          RSS=$(grep -E "Maximum resident set size|maximum resident set size" kani.log | tail -1 | tr -s ' ')
+          DONE=$(grep -E "^Complete - " kani.log | tail -1)
+          NAMES=$(grep -o "Verification failed for - .*" kani.log | sed 's/.*verify:://' | cut -c1-40 | tr '\n' ' ' | cut -c1-900)
+          echo "::notice title=${{ matrix.group }} ${{ matrix.os }}::pass=$PASS fail=$FAIL slowest=${SLOW}s | $RSS | $DONE | failed: $NAMES"
+          {
+            echo "### ${{ matrix.group }} on ${{ matrix.os }}"
+            echo "pass=$PASS fail=$FAIL slowest=${SLOW}s"
+            echo "$RSS"
+            echo '```'
+            grep -E "^Checking harness|VERIFICATION:-|Verification Time|^Complete - " kani.log | tail -120
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kani-${{ matrix.group }}-${{ matrix.os }}
+          path: kani.log
