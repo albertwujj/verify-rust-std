@@ -2202,9 +2202,9 @@ mod verify {
     //! * Size and alignment: every branch on them in the functions called.
     //!   * Zero-sized or not, in `RawVecInner::{capacity, current_memory, grow_amortized}`,
     //!     `ptr::swap_nonoverlapping`, `Global::{alloc_impl_runtime, grow_impl_runtime}` and the
-    //!     precondition checks of `slice::from_raw_parts_mut` and of the pointer functions: `()`,
-    //!     and every other type. `grow_amortized` is only reached with a zero-sized type when
-    //!     the vector is full (`panic_push_full`, `panic_append_too_long`).
+    //!     precondition checks of `slice::from_raw_parts_mut` and of the pointer functions: `()`
+    //!     and `[u64; 0]`, and every other type. `grow_amortized` is only reached with a
+    //!     zero-sized type when the vector is full (`panic_push_full`, `panic_append_overflow`).
     //!   * `raw_vec::min_non_zero_cap`, when `push` or `append` reallocates: size 1 (`u8`,
     //!     `bool`), up to 1 KiB (the types of 2 to 16 bytes), larger (`[u64; 256]`, 2 KiB). The
     //!     harnesses of `push` and `append` have a `kani::cover` for the reallocation.
@@ -2212,7 +2212,10 @@ mod verify {
     //!     and 2048 bytes); a tail only, of 1, 2, 4 and 4 + 2 bytes (`u8`, `u16`, `u32`,
     //!     `[u8; 6]`); a word and a tail (`Padded`, 12 bytes).
     //!   * Alignment: 1, 2, 4, 8 and 16. It is only compared between the old and the new layout
-    //!     of a reallocation, which are equal.
+    //!     of a reallocation, which are equal. A vector of a zero-sized type has no buffer: its
+    //!     pointer is the alignment of the type. For `()` every address is aligned, so the
+    //!     alignment conditions of `ptr::read`, `ptr::copy_nonoverlapping` and `ptr::swap`
+    //!     cannot fail; for `[u64; 0]` (alignment 8) they can.
     //!
     //!   One arm is not reached: `Layout::repeat_packed` fails, and `RawVec` panics with
     //!   "capacity overflow", when a buffer would exceed `isize::MAX` bytes, which is above
@@ -2280,6 +2283,9 @@ mod verify {
     //!   `pop`: Kani issue #4905.)
     //! * The buffer of a sized type is at most `MAX_BYTES` long, because of CBMC's object model
     //!   (see `MAX_BYTES`).
+    //! * Every heap is in the global allocator. The functions in scope are generic in the
+    //!   allocator `A` and reach it only through the methods of `Vec<T, A>`, which the
+    //!   challenge allows to assume correct.
     //! * The loop contracts state where the hole is, not what the elements are. After a loop
     //!   with a contract, Kani therefore treats every element as arbitrary bytes, which for
     //!   `bool` includes invalid bit patterns. The functions in scope never read an element
@@ -2492,6 +2498,7 @@ mod verify {
     }
     all_zero_is_valid!(
         AnyOrd<()>,
+        AnyOrd<[u64; 0]>,
         AnyOrd<u8>,
         // `bool` has a validity invariant: only the bytes 0 (`false`) and 1 are values of it.
         AnyOrd<bool>,
@@ -3155,8 +3162,9 @@ mod verify {
         };
     }
 
-    // Every harness, for these layouts: zero-sized; 1, 2, 4, 8 and 16 bytes, with alignment
-    // 1 to 16; and 2 KiB, the last size class of `RawVec`'s growth (larger than 1 KiB).
+    // Every harness, for these layouts: zero-sized, with alignment 1 and 8; 1, 2, 4, 8 and
+    // 16 bytes, with alignment 1 to 16; and 2 KiB, the last size class of `RawVec`'s growth
+    // (larger than 1 KiB).
     // When swapped (`pop`), they are whole words, or a tail of 4, 2 or 1 bytes. `bool`
     // (1 byte) has invalid bit patterns, `CellOrd` (8 bytes) has comparisons that overwrite
     // their operands, and `DropFails` (2 bytes) fails the proof if an element is dropped.
@@ -3164,6 +3172,13 @@ mod verify {
         use super::*;
         element_harnesses!(AnyOrd<()>);
         loop_harnesses!(AnyOrd<()>);
+    }
+    // A vector of a zero-sized type has no buffer, and its pointer is the alignment of the
+    // type: 1 for `()`, for which no address is misaligned, and 8 here.
+    mod t_zst_align8 {
+        use super::*;
+        element_harnesses!(AnyOrd<[u64; 0]>);
+        loop_harnesses!(AnyOrd<[u64; 0]>);
     }
     mod t_u8 {
         use super::*;
@@ -3321,6 +3336,7 @@ mod verify {
     /// The end of a harness in which every execution panics before this point. Kani reports
     /// reaching it as a failure that is not a panic, so the `should_panic` harness then
     /// fails: it passes only if no execution returns from the call under test.
+    /// (`kani::safety_check(false, ..)` would say the same, but it is private to `core`.)
     fn must_have_panicked() -> ! {
         // SAFETY: not reached in a harness that passes; Kani checks that.
         unsafe { core::hint::unreachable_unchecked() }
